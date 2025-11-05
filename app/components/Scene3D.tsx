@@ -149,7 +149,7 @@ function CameraRig({
     const cameraHeight = 0.25;
     const cameraOffset = 0.45;
 
-    const tourDuration = 15;
+    const tourDuration = 30;
     progress.current += delta / tourDuration;
 
     if (progress.current >= 1) {
@@ -232,11 +232,13 @@ function Plane({ bounds }: PlaneProps) {
   mapTexture.wrapS = mapTexture.wrapT = THREE.RepeatWrapping;
   mapTexture.repeat.set(1, 1);
 
-  const planeSize = 1.2;
+  const mapRadius = 0.8;
 
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
-      <circleGeometry args={[planeSize / 2, 64]} />
+      {/* 2. We use CircleGeometry which maps the texture correctly */}
+      <circleGeometry args={[mapRadius, 64]} />
+
       <meshBasicMaterial map={mapTexture} toneMapped={false} />
     </mesh>
   );

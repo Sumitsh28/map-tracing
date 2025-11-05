@@ -7,12 +7,12 @@ import {
   Marker,
   Popup,
   Polyline,
-  useMap,
 } from "react-leaflet";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import MapAutoFitter from "./MapAutoFitter";
 import Scene3D from "./Scene3D";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 export interface Coordinate {
   lat: number;
@@ -31,12 +31,10 @@ export interface Waypoint extends Coordinate {
 const haversineDistance = (p1: Coordinate, p2: Coordinate): number => {
   const toRad = (x: number) => (x * Math.PI) / 180;
   const R = 6371;
-
   const dLat = toRad(p2.lat - p1.lat);
   const dLng = toRad(p2.lng - p1.lng);
   const lat1 = toRad(p1.lat);
   const lat2 = toRad(p2.lat);
-
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2);
@@ -88,15 +86,19 @@ const currentIcon = L.icon({
 
 const interpolatedIcon = L.icon({
   iconUrl:
-    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzc1NzU3NSIgd2lkdGg9IjEycHgiIGhlaWdodD0iMTJweCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIC8+PC9zdmc+", // Simple grey dot
+    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI0ZGRkZGRiIgd2lkdGg9IjEycHgiIGhlaWdodD0iMTJweCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIC8+PC9zdmc+",
   iconSize: [12, 12],
   iconAnchor: [6, 6],
 });
 
 L.Marker.prototype.options.icon = defaultIcon;
 
+// --- Constants ---
+
 const DRONE_SPEED_KMPH = 60;
 const KM_PER_DEG_LAT = 111.1;
+
+// --- Component ---
 
 export default function MapVisualizer() {
   const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
@@ -104,17 +106,28 @@ export default function MapVisualizer() {
   const [isLoading, setIsLoading] = useState(false);
   const [isTouring, setIsTouring] = useState(false);
   const [isAutoRotating, setIsAutoRotating] = useState(true);
+  const [isPanelOpen, setIsPanelOpen] = useState(true);
 
   const [rawText, setRawText] = useState("");
   const [initialPoints, setInitialPoints] = useState<Coordinate[]>([]);
+
   const [allWaypoints, setAllWaypoints] = useState<Waypoint[]>([]);
+
+  const [staticSimulatedPath, setStaticSimulatedPath] = useState<Waypoint[]>(
+    []
+  );
+
+  const [visualizedPoints, setVisualizedPoints] = useState<Waypoint[]>([]);
+
   const [idealWaypoints, setIdealWaypoints] = useState<Coordinate[]>([]);
 
-  const [visualizedPoints, setVisualizedPoints] = useState<Coordinate[]>([]);
   const [currentPoint, setCurrentPoint] = useState<number | null>(null);
   const [totalPoints, setTotalPoints] = useState(0);
-
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [usePlaygroundWind, setUsePlaygroundWind] = useState(false);
+  const [playgroundWindSpeed, setPlaygroundWindSpeed] = useState(20);
+  const [playgroundWindDirection, setPlaygroundWindDirection] = useState(90);
 
   useEffect(() => {
     return () => {
@@ -124,15 +137,20 @@ export default function MapVisualizer() {
     };
   }, []);
 
-  const handleParseCoordinates = () => {
-    setError(null);
+  const resetPaths = () => {
     setVisualizedPoints([]);
     setAllWaypoints([]);
+    setStaticSimulatedPath([]);
     setIdealWaypoints([]);
     setTotalPoints(0);
     setCurrentPoint(null);
-    setIsLoading(true);
     setIsTouring(false);
+  };
+
+  const handleParseCoordinates = () => {
+    setError(null);
+    resetPaths();
+    setIsLoading(true);
 
     const pairRegex = /(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/g;
     const matches = [...rawText.matchAll(pairRegex)];
@@ -150,7 +168,6 @@ export default function MapVisualizer() {
     for (const match of matches) {
       const lat = Number(match[1]);
       const lng = Number(match[2]);
-
       if (!isNaN(lat) && !isNaN(lng)) {
         newPoints.push({ lat, lng });
       }
@@ -171,8 +188,9 @@ export default function MapVisualizer() {
     if (!file) return;
 
     setError(null);
+    resetPaths();
     setIsLoading(true);
-    setIsTouring(false);
+
     const reader = new FileReader();
 
     reader.onload = (e) => {
@@ -197,9 +215,6 @@ export default function MapVisualizer() {
             setInitialPoints(newPoints);
             setRawText(newPoints.map((p) => `${p.lat}, ${p.lng}`).join("\n"));
             setIsAutoRotating(true);
-            setAllWaypoints([]);
-            setIdealWaypoints([]);
-            setVisualizedPoints([]);
           } else {
             setError(
               "JSON file is an array, but items are not valid coordinates."
@@ -232,94 +247,122 @@ export default function MapVisualizer() {
     setIsLoading(true);
     setIsTouring(false);
     setVisualizedPoints([]);
-    setIdealWaypoints([]);
+    setStaticSimulatedPath([]);
+
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
 
-    const generatedWaypoints: Waypoint[] = [];
-    const generatedIdealCoords: Coordinate[] = [];
-    let idCounter = 0;
-    let time = new Date();
+    const generatePath = (
+      useCustomWind: boolean
+    ): { waypoints: Waypoint[]; idealCoords: Coordinate[] } => {
+      const waypoints: Waypoint[] = [];
+      const idealCoords: Coordinate[] = [];
+      let idCounter = 0;
+      let time = new Date();
 
-    const addWaypoint = (p: Coordinate, type: "initial" | "interpolated") => {
-      time.setSeconds(time.getSeconds() + 10);
-      const data = getSimulatedData(p.lat, p.lng);
-      generatedWaypoints.push({
-        ...p,
-        id: idCounter++,
-        type: type,
-        timestamp: time.toISOString(),
-        ...data,
-      });
+      const addWaypoint = (
+        p: Coordinate,
+        type: "initial" | "interpolated",
+        data: Pick<Waypoint, "temperature" | "windSpeed" | "windDirection">
+      ) => {
+        time.setSeconds(time.getSeconds() + 10);
+        waypoints.push({
+          ...p,
+          id: idCounter++,
+          type: type,
+          timestamp: time.toISOString(),
+          ...data,
+        });
+      };
+
+      const initialData = getSimulatedData(
+        initialPoints[0].lat,
+        initialPoints[0].lng
+      );
+      addWaypoint(initialPoints[0], "initial", initialData);
+      idealCoords.push(initialPoints[0]);
+
+      for (let i = 0; i < initialPoints.length - 1; i++) {
+        const p1 = initialPoints[i];
+        const p2 = initialPoints[i + 1];
+        const segment_dist_km = haversineDistance(p1, p2);
+        const extraPoints = Math.floor(segment_dist_km / 0.5);
+        const step_dist_km = segment_dist_km / (extraPoints + 1);
+        const step_time_hours = step_dist_km / DRONE_SPEED_KMPH;
+
+        for (let j = 1; j <= extraPoints; j++) {
+          const t = j / (extraPoints + 1);
+          const idealPoint = interpolatePoint(p1, p2, t);
+          idealCoords.push(idealPoint);
+
+          const { temperature, windSpeed, windDirection } = useCustomWind
+            ? {
+                temperature: getSimulatedData(idealPoint.lat, idealPoint.lng)
+                  .temperature,
+                windSpeed: playgroundWindSpeed,
+                windDirection: playgroundWindDirection,
+              }
+            : getSimulatedData(idealPoint.lat, idealPoint.lng);
+
+          const toRad = (deg: number) => (deg * Math.PI) / 180;
+          const windDirectionRad = toRad(windDirection);
+          const drift_km = windSpeed * step_time_hours;
+          const drift_y_km = drift_km * Math.cos(windDirectionRad);
+          const drift_x_km = drift_km * Math.sin(windDirectionRad);
+          const km_per_deg_lng =
+            KM_PER_DEG_LAT * Math.cos(toRad(idealPoint.lat));
+          const drift_lat = drift_y_km / KM_PER_DEG_LAT;
+          const drift_lng = drift_x_km / km_per_deg_lng;
+          const realisticPoint: Coordinate = {
+            lat: idealPoint.lat + drift_lat,
+            lng: idealPoint.lng + drift_lng,
+          };
+
+          addWaypoint(realisticPoint, "interpolated", {
+            temperature,
+            windSpeed,
+            windDirection,
+          });
+        }
+
+        const endData = getSimulatedData(p2.lat, p2.lng);
+        addWaypoint(p2, "initial", endData);
+        idealCoords.push(p2);
+      }
+      return { waypoints, idealCoords };
     };
 
-    addWaypoint(initialPoints[0], "initial");
-    generatedIdealCoords.push(initialPoints[0]);
+    const { waypoints: officialWaypoints, idealCoords } = generatePath(false);
+    setAllWaypoints(officialWaypoints);
+    setIdealWaypoints(idealCoords);
 
-    for (let i = 0; i < initialPoints.length - 1; i++) {
-      const p1 = initialPoints[i];
-      const p2 = initialPoints[i + 1];
+    let pathFor2DAnimation: Waypoint[];
 
-      const segment_dist_km = haversineDistance(p1, p2);
-
-      const extraPoints = Math.floor(segment_dist_km / 0.5);
-
-      const step_dist_km = segment_dist_km / (extraPoints + 1);
-
-      const step_time_hours = step_dist_km / DRONE_SPEED_KMPH;
-
-      for (let j = 1; j <= extraPoints; j++) {
-        const t = j / (extraPoints + 1);
-
-        const idealPoint = interpolatePoint(p1, p2, t);
-        generatedIdealCoords.push(idealPoint);
-
-        const data = getSimulatedData(idealPoint.lat, idealPoint.lng);
-
-        const toRad = (deg: number) => (deg * Math.PI) / 180;
-        const windDirectionRad = toRad(data.windDirection);
-
-        const drift_km = data.windSpeed * step_time_hours;
-
-        const drift_y_km = drift_km * Math.cos(windDirectionRad);
-        const drift_x_km = drift_km * Math.sin(windDirectionRad);
-
-        const km_per_deg_lng = KM_PER_DEG_LAT * Math.cos(toRad(idealPoint.lat));
-
-        const drift_lat = drift_y_km / KM_PER_DEG_LAT;
-        const drift_lng = drift_x_km / km_per_deg_lng;
-
-        const realisticPoint: Coordinate = {
-          lat: idealPoint.lat + drift_lat,
-          lng: idealPoint.lng + drift_lng,
-        };
-
-        addWaypoint(realisticPoint, "interpolated");
-      }
-
-      addWaypoint(p2, "initial");
-      generatedIdealCoords.push(p2);
+    if (usePlaygroundWind) {
+      setStaticSimulatedPath(officialWaypoints);
+      const { waypoints: playgroundWaypoints } = generatePath(true);
+      pathFor2DAnimation = playgroundWaypoints;
+    } else {
+      pathFor2DAnimation = officialWaypoints;
     }
 
-    setAllWaypoints(generatedWaypoints);
-    setIdealWaypoints(generatedIdealCoords);
-    setTotalPoints(generatedWaypoints.length);
+    setTotalPoints(pathFor2DAnimation.length);
     setCurrentPoint(0);
     setIsLoading(false);
 
     const step = (index: number) => {
-      if (index >= generatedWaypoints.length) {
+      if (index >= pathFor2DAnimation.length) {
         setCurrentPoint(null);
         return;
       }
 
-      setVisualizedPoints(generatedWaypoints.slice(0, index + 1));
+      setVisualizedPoints(pathFor2DAnimation.slice(0, index + 1));
       setCurrentPoint(index);
 
       timeoutRef.current = setTimeout(() => {
         step(index + 1);
-      }, 200);
+      }, 300);
     };
 
     step(0);
@@ -334,10 +377,9 @@ export default function MapVisualizer() {
     }
 
     try {
-      const dataStr = JSON.stringify(allWaypoints, null, 2); // Pretty-print JSON
+      const dataStr = JSON.stringify(allWaypoints, null, 2);
       const dataUri =
         "data:application/json;charset=utf-8," + encodeURIComponent(dataStr);
-
       const linkElement = document.createElement("a");
       linkElement.setAttribute("href", dataUri);
       linkElement.setAttribute("download", "drone_waypoints.json");
@@ -349,169 +391,13 @@ export default function MapVisualizer() {
   };
 
   return (
-    <div className="flex h-full w-full flex-col-reverse md:flex-row">
-      <div className="w-full flex-shrink-0 overflow-y-auto bg-gray-900 p-4 md:w-80 lg:w-96">
-        <h2 className="mb-4 text-2xl font-bold text-white">Controls</h2>
-
-        <div className="mb-4">
-          <label className="mb-2 block text-sm font-medium text-gray-300">
-            View Mode
-          </label>
-          <div className="flex rounded-md shadow-sm">
-            <button
-              onClick={() => {
-                setViewMode("2d");
-                setIsTouring(false);
-                setIsAutoRotating(false);
-              }}
-              className={`flex-1 rounded-l-md px-4 py-2 text-sm font-medium ${
-                viewMode === "2d"
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-              }`}
-            >
-              2D Map
-            </button>
-            <button
-              onClick={() => setViewMode("3d")}
-              className={`flex-1 rounded-r-md px-4 py-2 text-sm font-medium ${
-                viewMode === "3d"
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-              }`}
-            >
-              3D Path
-            </button>
-          </div>
-        </div>
-
-        <div className="mb-4">
-          <label
-            htmlFor="coordinates"
-            className="mb-2 block text-sm font-medium text-gray-300"
-          >
-            Input Coordinates (lat, lng pairs)
-          </label>
-          <textarea
-            id="coordinates"
-            rows={5}
-            className="block w-full rounded-md border-gray-600 bg-gray-800 p-2.5 text-sm text-white placeholder-gray-400 focus:border-blue-500 focus:ring-blue-500"
-            placeholder="25.2677, 82.9913
-25.309, 82.999
-25.305, 83.010"
-            value={rawText}
-            onChange={(e) => setRawText(e.target.value)}
-          ></textarea>
-        </div>
-
-        {error && (
-          <div className="mb-4 rounded-md bg-red-900 p-3">
-            <p className="text-sm text-red-200">{error}</p>
-          </div>
-        )}
-
-        <button
-          onClick={handleParseCoordinates}
-          disabled={isLoading}
-          className="mb-2 w-full rounded-lg bg-blue-600 px-5 py-2.5 text-center text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {isLoading ? "Loading..." : "Load Points"}
-        </button>
-
-        <div className="mb-4 text-center text-sm text-gray-400">
-          Or Upload JSON File
-        </div>
-        <input
-          type="file"
-          accept=".json,application/json"
-          onChange={handleFileUpload}
-          className="mb-4 block w-full text-sm text-gray-400
-            file:mr-4 file:rounded-md file:border-0
-            file:bg-gray-700 file:px-4 file:py-2
-            file:text-sm file:font-semibold file:text-blue-300
-            hover:file:bg-gray-600"
-        />
-
-        <hr className="my-4 border-gray-700" />
-        <div className="space-y-2">
-          <button
-            onClick={startVisualization}
-            disabled={initialPoints.length < 2 || isLoading}
-            className="w-full rounded-lg bg-green-600 px-5 py-2.5 text-center text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-          >
-            {isLoading ? "Visualizing..." : "Start Visualization"}
-          </button>
-
-          <button
-            onClick={handleDownloadData}
-            disabled={allWaypoints.length === 0 || isLoading}
-            className="w-full rounded-lg bg-purple-600 px-5 py-2.5 text-center text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50"
-          >
-            Download Waypoint Data
-          </button>
-
-          {viewMode === "3d" && allWaypoints.length > 0 && (
-            <>
-              {!isTouring && (
-                <button
-                  onClick={() => setIsAutoRotating(!isAutoRotating)}
-                  className={`w-full rounded-lg px-5 py-2.5 text-center text-sm font-medium text-white ${
-                    isAutoRotating
-                      ? "bg-yellow-600 hover:bg-yellow-700"
-                      : "bg-gray-600 hover:bg-gray-700"
-                  } disabled:opacity-50`}
-                >
-                  {isAutoRotating ? "Stop Rotation" : "Start Rotation"}
-                </button>
-              )}
-
-              <button
-                onClick={() => {
-                  setIsTouring(!isTouring);
-                  setIsAutoRotating(false);
-                }}
-                disabled={isLoading}
-                className={`w-full rounded-lg px-5 py-2.5 text-center text-sm font-medium text-white ${
-                  isTouring
-                    ? "bg-red-600 hover:bg-red-700"
-                    : "bg-indigo-600 hover:bg-indigo-700"
-                } disabled:opacity-50`}
-              >
-                {isTouring ? "Stop 3D Tour" : "Start 3D Tour"}
-              </button>
-            </>
-          )}
-        </div>
-
-        {totalPoints > 0 && (
-          <div className="mt-4 rounded-md bg-gray-800 p-3 text-center">
-            <p className="text-sm text-gray-300">
-              {currentPoint !== null
-                ? `Visualizing point ${currentPoint + 1} of ${totalPoints}`
-                : `Visualization complete. ${totalPoints} total waypoints.`}
-            </p>
-            {currentPoint !== null && (
-              <div className="mt-2 w-full rounded-full bg-gray-700">
-                <div
-                  className="rounded-full bg-blue-500 p-0.5 text-center text-xs font-medium leading-none text-blue-100"
-                  style={{
-                    width: `${((currentPoint + 1) / totalPoints) * 100}%`,
-                  }}
-                >
-                  {Math.round(((currentPoint + 1) / totalPoints) * 100)}%
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
+    <div className="relative flex h-screen w-full overflow-hidden bg-gray-950">
       <div className="h-full w-full">
         {viewMode === "2d" ? (
           <MapContainer
             center={[25.3176, 82.9739]}
             zoom={13}
-            className="h-full w-full"
+            className="h-full w-full z-0"
             attributionControl={false}
           >
             <TileLayer
@@ -539,22 +425,38 @@ export default function MapVisualizer() {
             {idealWaypoints.length > 0 && (
               <Polyline
                 pathOptions={{
-                  color: "red",
+                  color: "#ef4444",
                   weight: 2,
-                  dashArray: "5, 10",
-                  opacity: 0.7,
+                  dashArray: "6, 8",
+                  opacity: 0.85,
                 }}
                 positions={idealWaypoints.map((p) => [p.lat, p.lng])}
               />
             )}
 
-            {allWaypoints.length > 0 &&
-              allWaypoints.map((p) => (
+            {staticSimulatedPath.length > 0 && (
+              <Polyline
+                pathOptions={{
+                  color: "#a855f7",
+                  weight: 3,
+                  opacity: 0.7,
+                }}
+                positions={staticSimulatedPath.map((p) => [p.lat, p.lng])}
+              />
+            )}
+
+            <Polyline
+              pathOptions={{ color: "#06b6d4", weight: 3 }} // Cyan/Blue
+              positions={visualizedPoints.map((p) => [p.lat, p.lng])}
+            />
+
+            {visualizedPoints.length > 0 &&
+              visualizedPoints.map((p) => (
                 <Marker
                   key={`waypoint-${p.id}`}
                   position={[p.lat, p.lng]}
                   icon={p.type === "initial" ? defaultIcon : interpolatedIcon}
-                  opacity={p.type === "initial" ? 1.0 : 0.6}
+                  opacity={p.type === "initial" ? 1.0 : 0.65}
                   zIndexOffset={p.type === "initial" ? 1000 : 0}
                 >
                   <Popup>
@@ -568,7 +470,7 @@ export default function MapVisualizer() {
                     Timestamp: {new Date(p.timestamp).toLocaleTimeString()}
                     {p.type === "interpolated" && (
                       <>
-                        <hr style={{ margin: "4px 0" }} />
+                        <hr style={{ margin: "6px 0" }} />
                         <strong>Deviation Cause:</strong>
                         <br />- Wind: {p.windSpeed.toFixed(0)} km/h @{" "}
                         {p.windDirection.toFixed(0)}°
@@ -578,11 +480,6 @@ export default function MapVisualizer() {
                   </Popup>
                 </Marker>
               ))}
-
-            <Polyline
-              pathOptions={{ color: "cyan", weight: 3 }}
-              positions={visualizedPoints.map((p) => [p.lat, p.lng])}
-            />
 
             {currentPoint !== null && visualizedPoints[currentPoint] && (
               <Marker
@@ -606,6 +503,248 @@ export default function MapVisualizer() {
             onInteracted={() => setIsAutoRotating(false)}
           />
         )}
+      </div>
+
+      <div
+        className={`absolute right-6 top-1/2 -translate-y-1/2 z-30 w-96 max-w-[420px] p-1 transition-transform duration-300 ease-in-out ${
+          isPanelOpen ? "translate-x-0" : "translate-x-[calc(100%-56px)]"
+        }`}
+      >
+        <button
+          onClick={() => setIsPanelOpen(!isPanelOpen)}
+          aria-label={isPanelOpen ? "Collapse panel" : "Expand panel"}
+          className="absolute top-1/2 -translate-y-1/2 rounded-lg text-white shadow-2xl z-[9999] bg-gray-950/75 hover:bg-gray-900/75 border border-white/10 transition-transform hover:scale-105 flex items-center justify-center"
+          style={{
+            left: "-16px",
+            width: "32px",
+            height: "32px",
+          }}
+        >
+          {isPanelOpen ? (
+            <ChevronRightIcon className="h-5 w-5" />
+          ) : (
+            <ChevronLeftIcon className="h-5 w-5" />
+          )}
+        </button>
+
+        <div
+          className="relative rounded-3xl border border-white/6 bg-gradient-to-br from-black/40 to-gray-900/30 backdrop-blur-lg shadow-xl overflow-hidden"
+          style={{
+            boxShadow:
+              "0 10px 30px rgba(2,6,23,0.6), inset 0 1px 0 rgba(255,255,255,0.02)",
+            WebkitBackdropFilter: "saturate(120%) blur(14px)",
+            backdropFilter: "saturate(120%) blur(14px)",
+          }}
+        >
+          <div className="p-5">
+            <h2 className="mb-4 text-2xl font-semibold text-white">
+              Drone Controls
+            </h2>
+
+            <div className="mb-4">
+              <label className="mb-2 block text-sm font-medium text-gray-300">
+                View Mode
+              </label>
+              <div className="flex rounded-xl bg-white/2 p-1 gap-1">
+                <button
+                  onClick={() => {
+                    setViewMode("2d");
+                    setIsTouring(false);
+                    setIsAutoRotating(false);
+                  }}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 ${
+                    viewMode === "2d"
+                      ? "bg-gray-800 text-white shadow-inner"
+                      : "bg-transparent text-gray-300 hover:bg-white/2"
+                  }`}
+                >
+                  2D Map
+                </button>
+                <button
+                  onClick={() => setViewMode("3d")}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 ${
+                    viewMode === "3d"
+                      ? "bg-gray-800 text-white shadow-inner"
+                      : "bg-transparent text-gray-300 hover:bg-white/2"
+                  }`}
+                >
+                  3D Path
+                </button>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label
+                htmlFor="coordinates"
+                className="mb-2 block text-sm font-medium text-gray-300"
+              >
+                Input Coordinates (lat, lng pairs)
+              </label>
+              <textarea
+                id="coordinates"
+                rows={5}
+                className="block w-full rounded-xl border border-white/6 bg-gradient-to-br from-black/30 to-gray-900/30 p-3 text-sm text-white placeholder-gray-400 focus:border-white/20 focus:ring-0 outline-none shadow-inner"
+                placeholder={`25.2677, 82.9913
+25.309, 82.999
+25.305, 83.010`}
+                value={rawText}
+                onChange={(e) => setRawText(e.target.value)}
+              ></textarea>
+            </div>
+
+            {error && (
+              <div className="mb-4 rounded-lg bg-red-900/50 p-3">
+                <p className="text-sm text-red-100">{error}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleParseCoordinates}
+                disabled={isLoading}
+                className="flex-1 rounded-xl border border-white/6 bg-gray-800/80 px-4 py-2 text-sm font-semibold text-white shadow-md hover:scale-[1.01] transition-transform disabled:opacity-50"
+              >
+                {isLoading ? "Loading..." : "Load Points"}
+              </button>
+
+              <label className="flex-1">
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+                <div className="rounded-xl border border-white/6 bg-transparent px-4 py-2 text-sm font-semibold text-blue-200 text-center cursor-pointer hover:bg-white/2">
+                  Upload JSON
+                </div>
+              </label>
+            </div>
+
+            <div className="my-4 h-px bg-white/6" />
+            <div className="space-y-3 rounded-xl bg-white/5 p-3">
+              <label className="flex items-center justify-between text-base font-medium text-white">
+                Wind Playground (2D Only)
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 rounded text-blue-500 border-gray-500 focus:ring-blue-500"
+                  checked={usePlaygroundWind}
+                  onChange={(e) => setUsePlaygroundWind(e.target.checked)}
+                />
+              </label>
+
+              <div
+                className={`mt-2 space-y-3 transition-opacity ${
+                  !usePlaygroundWind ? "opacity-50" : ""
+                }`}
+              >
+                <label className="mb-1 block text-sm font-medium text-gray-300">
+                  Wind Speed ({playgroundWindSpeed} km/h)
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={playgroundWindSpeed}
+                  disabled={!usePlaygroundWind}
+                  onChange={(e) =>
+                    setPlaygroundWindSpeed(Number(e.target.value))
+                  }
+                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed"
+                />
+                <label className="mb-1 block text-sm font-medium text-gray-300">
+                  Wind Direction ({playgroundWindDirection}°)
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="360"
+                  step="1"
+                  value={playgroundWindDirection}
+                  disabled={!usePlaygroundWind}
+                  onChange={(e) =>
+                    setPlaygroundWindDirection(Number(e.target.value))
+                  }
+                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer disabled:cursor-not-allowed"
+                />
+              </div>
+            </div>
+
+            <div className="my-4 h-px bg-white/6" />
+
+            <div className="space-y-3">
+              <button
+                onClick={startVisualization}
+                disabled={initialPoints.length < 2 || isLoading}
+                className="w-full rounded-2xl bg-gradient-to-br from-gray-800/90 to-gray-700/80 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg hover:shadow-xl transition-all disabled:opacity-50"
+              >
+                {isLoading ? "Visualizing..." : "Start Visualization"}
+              </button>
+
+              <button
+                onClick={handleDownloadData}
+                disabled={allWaypoints.length === 0 || isLoading}
+                className="w-full rounded-2xl border border-white/6 bg-transparent px-4 py-3 text-center text-sm font-semibold text-white shadow-sm hover:bg-white/2 transition-all disabled:opacity-50"
+              >
+                Download Waypoint Data
+              </button>
+
+              {viewMode === "3d" && allWaypoints.length > 0 && (
+                <div className="grid grid-cols-1 gap-2">
+                  {!isTouring && (
+                    <button
+                      onClick={() => setIsAutoRotating(!isAutoRotating)}
+                      className={`w-full rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-md transition-all ${
+                        isAutoRotating
+                          ? "bg-gray-700/90 hover:bg-gray-700"
+                          : "bg-transparent hover:bg-white/2 border border-white/6"
+                      }`}
+                    >
+                      {isAutoRotating ? "Stop Rotation" : "Start Rotation"}
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      setIsTouring(!isTouring);
+                      setIsAutoRotating(false);
+                    }}
+                    disabled={isLoading}
+                    className={`w-full rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-md transition-all ${
+                      isTouring
+                        ? "bg-red-700/90 hover:bg-red-600"
+                        : "bg-indigo-700/90 hover:bg-indigo-600"
+                    }`}
+                  >
+                    {isTouring ? "Stop 3D Tour" : "Start 3D Tour"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {totalPoints > 0 && (
+              <div className="mt-5 rounded-xl bg-white/2 p-3 text-center">
+                <p className="text-sm font-medium text-white">
+                  {currentPoint !== null
+                    ? `Visualizing point ${currentPoint + 1} of ${totalPoints}`
+                    : `Visualization complete. ${totalPoints} total waypoints.`}
+                </p>
+                {currentPoint !== null && (
+                  <div className="mt-2 w-full rounded-full bg-gray-800/60">
+                    <div
+                      className="rounded-full bg-white/10 p-1 text-center text-xs font-medium leading-none text-white"
+                      style={{
+                        width: `${((currentPoint + 1) / totalPoints) * 100}%`,
+                      }}
+                    >
+                      {Math.round(((currentPoint + 1) / totalPoints) * 100)}%
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
