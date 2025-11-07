@@ -4,7 +4,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Line, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import * as L from "leaflet";
-import { Waypoint } from "./MapVisualizer";
+import { Waypoint } from "../helpers/types";
 
 interface PathData {
   points: THREE.Vector3[];
