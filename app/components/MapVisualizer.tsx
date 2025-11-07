@@ -7,12 +7,14 @@ import {
   Marker,
   Popup,
   Polyline,
+  useMapEvents,
+  useMap,
 } from "react-leaflet";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import MapAutoFitter from "./MapAutoFitter";
 import Scene3D from "./Scene3D";
-import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, CrosshairIcon } from "lucide-react";
 
 export interface Coordinate {
   lat: number;
@@ -26,6 +28,38 @@ export interface Waypoint extends Coordinate {
   temperature: number;
   windSpeed: number;
   windDirection: number;
+}
+
+function MapClickHandler({
+  onMapClick,
+  isSelectMode,
+}: {
+  onMapClick: (latlng: L.LatLng) => void;
+  isSelectMode: boolean;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    const container = map.getContainer();
+    if (isSelectMode) {
+      container.style.cursor = "crosshair";
+    } else {
+      container.style.cursor = "";
+    }
+    return () => {
+      container.style.cursor = "";
+    };
+  }, [map, isSelectMode]);
+
+  useMapEvents({
+    click(e) {
+      if (isSelectMode) {
+        onMapClick(e.latlng);
+      }
+    },
+  });
+
+  return null;
 }
 
 const haversineDistance = (p1: Coordinate, p2: Coordinate): number => {
@@ -79,7 +113,7 @@ const defaultIcon = L.icon({
 
 const currentIcon = L.icon({
   iconUrl:
-    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iY3lhbiIgd2lkdGg9IjM2cHgiIGhlaWdodD0iMzZweCI+PHBhdGggZD0iTTEyIDJjLTUuNTIgMCAtMTAgNC40OCAtMTAgMTBzNC40OCAxMCAxMCAxMCAxMCAtNC40OCAxMCAtMTBTMjAuNTIgMiAxMiAyeiBtMCAxOGMtNC40MSAwIC04IC0zLjU5IC04IC04czMuNTkgLTggOCAtOCA4IDMuNTkgOCA4IC0zLjU5IDggLTggOHoiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI1Ii8+PC9zdmc+",
+    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iY3lhbiIgd2lkdGg9IjM2cHgiIGhlaWdodD0iMzZweCI+PHBhdGggZD0iTTEyIDJjLTUuNTIgMCAtMTAgNC40OCAtMTAgMTBzNC44OCAxMCAxMCAxMCAxMCAtNC40OCAxMCAtMTBTMjAuNTIgMiAxMiAyeiBtMCAxOGMtNC40MSAwIC04IC0zLjU5IC04IC04czMuNTkgLTggOCAtOCA4IDMuNTkgOCA4IC0zLjU5IDggLTggOHoiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI1Ii8+PC9zdmc+",
   iconSize: [32, 32],
   iconAnchor: [16, 16],
 });
@@ -91,15 +125,28 @@ const interpolatedIcon = L.icon({
   iconAnchor: [6, 6],
 });
 
+const userLocationIcon = L.icon({
+  iconUrl:
+    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzBkNjVmZCIgd2lkdGg9IjI0cHgiIGhlaWdodD0iMjRweCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iOCIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiAvPjwvc3ZnPg==",
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  popupAnchor: [0, -12],
+});
+
+const tempDotIcon = L.icon({
+  iconUrl:
+    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2Y4N2ExYSIgd2lkdGg9IjEycHgiIGhlaWdodD0iMTJweCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iOCIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiAvPjwvc3ZnPg==", // Orange dot
+  iconSize: [12, 12],
+  iconAnchor: [6, 6],
+});
+
 L.Marker.prototype.options.icon = defaultIcon;
 
 // --- Constants ---
-
 const DRONE_SPEED_KMPH = 60;
 const KM_PER_DEG_LAT = 111.1;
 
 // --- Component ---
-
 export default function MapVisualizer() {
   const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
   const [error, setError] = useState<string | null>(null);
@@ -111,14 +158,13 @@ export default function MapVisualizer() {
   const [rawText, setRawText] = useState("");
   const [initialPoints, setInitialPoints] = useState<Coordinate[]>([]);
 
-  const [allWaypoints, setAllWaypoints] = useState<Waypoint[]>([]);
+  const [clickedPoints, setClickedPoints] = useState<Coordinate[]>([]);
 
+  const [allWaypoints, setAllWaypoints] = useState<Waypoint[]>([]);
   const [staticSimulatedPath, setStaticSimulatedPath] = useState<Waypoint[]>(
     []
   );
-
   const [visualizedPoints, setVisualizedPoints] = useState<Waypoint[]>([]);
-
   const [idealWaypoints, setIdealWaypoints] = useState<Coordinate[]>([]);
 
   const [currentPoint, setCurrentPoint] = useState<number | null>(null);
@@ -129,6 +175,12 @@ export default function MapVisualizer() {
   const [playgroundWindSpeed, setPlaygroundWindSpeed] = useState(20);
   const [playgroundWindDirection, setPlaygroundWindDirection] = useState(90);
 
+  const mapRef = useRef<L.Map | null>(null);
+  const [userLocation, setUserLocation] = useState<Coordinate | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
+
+  const [isSelectMode, setIsSelectMode] = useState(false);
+
   useEffect(() => {
     return () => {
       if (timeoutRef.current) {
@@ -136,6 +188,47 @@ export default function MapVisualizer() {
       }
     };
   }, []);
+
+  // Effect for watching user's geolocation
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationError("Geolocation is not supported by your browser.");
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setUserLocation({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+        setLocationError(null);
+      },
+      (err) => {
+        setLocationError(`Geolocation error: ${err.message}`);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, []);
+
+  const handleViewModeChange = (mode: "2d" | "3d") => {
+    setViewMode(mode);
+    if (mode === "3d") {
+      setIsSelectMode(false);
+    }
+    if (mode === "2d") {
+      setIsTouring(false);
+      setIsAutoRotating(false);
+    }
+  };
 
   const resetPaths = () => {
     setVisualizedPoints([]);
@@ -145,6 +238,7 @@ export default function MapVisualizer() {
     setTotalPoints(0);
     setCurrentPoint(null);
     setIsTouring(false);
+    setClickedPoints([]);
   };
 
   const handleParseCoordinates = () => {
@@ -390,6 +484,20 @@ export default function MapVisualizer() {
     }
   };
 
+  const handleMapClick = (latlng: L.LatLng) => {
+    const newCoordStr = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+    setRawText((prev) => (prev ? `${prev}\n${newCoordStr}` : newCoordStr));
+
+    const newCoord = { lat: latlng.lat, lng: latlng.lng };
+    setClickedPoints((prev) => [...prev, newCoord]);
+  };
+
+  const handleFlyToUserLocation = () => {
+    if (mapRef.current && userLocation) {
+      mapRef.current.flyTo([userLocation.lat, userLocation.lng], 15);
+    }
+  };
+
   return (
     <div className="relative flex h-screen w-full overflow-hidden bg-gray-950">
       <div className="h-full w-full">
@@ -399,18 +507,34 @@ export default function MapVisualizer() {
             zoom={13}
             className="h-full w-full z-0"
             attributionControl={false}
+            ref={mapRef}
+            dragging={!isSelectMode}
+            scrollWheelZoom={true}
           >
             <TileLayer
               attribution="Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
               url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
             />
-
             <TileLayer
               attribution="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, iPC, USGS, FAO, NPS, NRCAN, GeoBase, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community"
               url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
               pane="shadowPane"
             />
             <MapAutoFitter points={initialPoints} />
+
+            <MapClickHandler
+              onMapClick={handleMapClick}
+              isSelectMode={isSelectMode}
+            />
+
+            {clickedPoints.map((p, idx) => (
+              <Marker
+                key={`temp-${idx}`}
+                position={[p.lat, p.lng]}
+                icon={tempDotIcon}
+                zIndexOffset={500}
+              />
+            ))}
 
             {allWaypoints.length === 0 &&
               initialPoints.map((p, idx) => (
@@ -446,7 +570,7 @@ export default function MapVisualizer() {
             )}
 
             <Polyline
-              pathOptions={{ color: "#06b6d4", weight: 3 }} // Cyan/Blue
+              pathOptions={{ color: "#06b6d4", weight: 3 }}
               positions={visualizedPoints.map((p) => [p.lat, p.lng])}
             />
 
@@ -493,6 +617,16 @@ export default function MapVisualizer() {
                 <Popup>Point {currentPoint + 1}</Popup>
               </Marker>
             )}
+
+            {userLocation && (
+              <Marker
+                position={[userLocation.lat, userLocation.lng]}
+                icon={userLocationIcon}
+                zIndexOffset={1500}
+              >
+                <Popup>Your Location</Popup>
+              </Marker>
+            )}
           </MapContainer>
         ) : (
           <Scene3D
@@ -505,6 +639,24 @@ export default function MapVisualizer() {
         )}
       </div>
 
+      {/* --- MODIFIED --- Fly to Location Button (Bottom Left) */}
+      <div className="absolute bottom-6 left-6 z-[1000] flex flex-col items-start">
+        <button
+          onClick={handleFlyToUserLocation}
+          disabled={!userLocation || viewMode === "3d"}
+          className="rounded-xl border border-white/10 bg-gray-950/75 px-4 py-3 text-sm font-semibold text-blue-200 shadow-xl backdrop-blur-lg transition-colors hover:bg-gray-900/75 disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label="Fly to my location"
+        >
+          {userLocation ? "My Location" : "Locating..."}
+        </button>
+        {locationError && (
+          <p className="mt-2 rounded-lg bg-red-900/75 p-2 text-xs text-red-100 shadow-lg backdrop-blur-lg">
+            {locationError}
+          </p>
+        )}
+      </div>
+
+      {/* --- Control Panel (Right Side) --- */}
       <div
         className={`absolute right-6 top-1/2 -translate-y-1/2 z-30 w-96 max-w-[420px] p-1 transition-transform duration-300 ease-in-out ${
           isPanelOpen ? "translate-x-0" : "translate-x-[calc(100%-56px)]"
@@ -547,11 +699,7 @@ export default function MapVisualizer() {
               </label>
               <div className="flex rounded-xl bg-white/2 p-1 gap-1">
                 <button
-                  onClick={() => {
-                    setViewMode("2d");
-                    setIsTouring(false);
-                    setIsAutoRotating(false);
-                  }}
+                  onClick={() => handleViewModeChange("2d")}
                   className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 ${
                     viewMode === "2d"
                       ? "bg-gray-800 text-white shadow-inner"
@@ -561,7 +709,7 @@ export default function MapVisualizer() {
                   2D Map
                 </button>
                 <button
-                  onClick={() => setViewMode("3d")}
+                  onClick={() => handleViewModeChange("3d")}
                   className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 ${
                     viewMode === "3d"
                       ? "bg-gray-800 text-white shadow-inner"
@@ -586,7 +734,8 @@ export default function MapVisualizer() {
                 className="block w-full rounded-xl border border-white/6 bg-gradient-to-br from-black/30 to-gray-900/30 p-3 text-sm text-white placeholder-gray-400 focus:border-white/20 focus:ring-0 outline-none shadow-inner"
                 placeholder={`25.2677, 82.9913
 25.309, 82.999
-25.305, 83.010`}
+25.305, 83.010
+(Or click on the map in 2D mode)`}
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
               ></textarea>
@@ -596,6 +745,22 @@ export default function MapVisualizer() {
               <div className="mb-4 rounded-lg bg-red-900/50 p-3">
                 <p className="text-sm text-red-100">{error}</p>
               </div>
+            )}
+
+            {viewMode === "2d" && (
+              <button
+                onClick={() => setIsSelectMode(!isSelectMode)}
+                className={`mb-3 w-full flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold text-center cursor-pointer transition-colors ${
+                  isSelectMode
+                    ? "border-blue-400 bg-blue-900/50 text-white"
+                    : "border-white/6 bg-transparent text-blue-200 hover:bg-white/5"
+                }`}
+              >
+                <CrosshairIcon className="h-4 w-4" />
+                {isSelectMode
+                  ? "Selection Mode Active"
+                  : "Enable Select Coordinates"}
+              </button>
             )}
 
             <div className="flex gap-3">
