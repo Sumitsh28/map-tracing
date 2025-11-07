@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useMap } from "react-leaflet";
 import * as L from "leaflet";
-import { type Coordinate } from "./MapVisualizer";
+import { Coordinate } from "../helpers/types";
 
 interface MapAutoFitterProps {
   points: Coordinate[];
