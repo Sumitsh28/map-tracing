@@ -65,9 +65,6 @@ First, we figure out how long the drone is exposed to the wind on this small ste
 
 - **Time for Step**: We calculate the time ($t$) it takes the drone to fly the small step distance ($d_{\text{step}}$) at its cruising speed ($v_{\text{drone}}$).
 
-  $$
-  t_{\text{hours}} = \frac{d_{\text{step\_km}}}{v_{\text{drone\_kmph}}}
-  $$
 
   JavaScript
 
@@ -77,9 +74,6 @@ First, we figure out how long the drone is exposed to the wind on this small ste
 
 - **Drift Distance**: We find the total distance ($d_{\text{drift}}$) the wind ($v_{\text{wind}}$) pushes the drone during that time.
 
-  $$
-  d_{\text{drift\_km}} = v_{\text{wind\_kmph}} \times t_{\text{hours}}
-  $$
 
   JavaScript
 
@@ -93,10 +87,6 @@ Next, we break that total drift distance into North/South and East/West componen
 
 - **North/South (Y) Component**: The total drift multiplied by the cosine of the wind angle.
 
-  $$
-  d_{\text{drift\_y\_km}} = d_{\text{drift\_km}} \times \cos(\theta_{\text{rad}})
-  $$
-
   JavaScript
 
   ```javascript
@@ -105,9 +95,6 @@ Next, we break that total drift distance into North/South and East/West componen
 
 - **East/West (X) Component**: The total drift multiplied by the sine of the wind angle.
 
-  $$
-  d_{\text{drift\_x\_km}} = d_{\text{drift\_km}} \times \sin(\theta_{\text{rad}})
-  $$
 
   JavaScript
 
@@ -121,9 +108,6 @@ Finally, we convert those drift distances in kilometers into changes in latitude
 
 - **Latitude Drift**: This is a simple conversion, as the distance between latitude lines is constant (approx. $111.1 \text{ km/degree}$).
 
-  $$
-  \Delta_{\text{lat}} = \frac{d_{\text{drift\_y\_km}}}{111.1}
-  $$
 
   JavaScript
 
@@ -133,13 +117,6 @@ Finally, we convert those drift distances in kilometers into changes in latitude
 
 - **Longitude Drift**: This is more complex because longitude lines get closer together near the poles. The distance depends on the cosine of the current latitude ($\phi_{\text{lat}}$).
 
-  $$
-  d_{\text{km\_per\_deg\_lng}} = 111.1 \times \cos(\phi_{\text{lat\_rad}})
-  $$
-
-  $$
-  \Delta_{\text{lng}} = \frac{d_{\text{drift\_x\_km}}}{d_{\text{km\_per\_deg\_lng}}}
-  $$
 
   JavaScript
 
@@ -152,9 +129,6 @@ Finally, we convert those drift distances in kilometers into changes in latitude
 
 We add these degree-based drift values to the original "ideal" point's coordinates to get the new, "realistic" point.
 
-$$
-p_{\text{realistic}} = (\text{lat}_{\text{ideal}} + \Delta_{\text{lat}}, \text{lng}_{\text{ideal}} + \Delta_{\text{lng}})
-$$
 
 JavaScript
 
